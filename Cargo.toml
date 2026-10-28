@@ -1,6 +1,6 @@
 [package]
 name = "coverly"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2021"
 description = "Movie and series posters as Windows folder icons: drop folders or video files, pick a cover, done."
 license = "MIT"
