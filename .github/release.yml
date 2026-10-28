@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v1.0.0"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      - name: Check the tag is on main
+        shell: pwsh
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor HEAD origin/main
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "$env:TAG is not on the main branch. Only commits on main are released."
+            exit 1
+          }
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $version = ((Get-Content Cargo.toml) -match '^version')[0].Split('"')[1]
+          if ("v$version" -ne $env:TAG) {
+            Write-Error "Tag $env:TAG doesn't match the version in Cargo.toml ($version). Change one of them."
+            exit 1
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "prerelease=$($version.Contains('-').ToString().ToLower())" >> $env:GITHUB_OUTPUT
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\NSIS\makensis.exe")) {
+            choco install nsis -y --no-progress
+          }
+
+      - name: Make installer and portable zip
+        shell: pwsh
+        run: |
+          $v = "${{ steps.version.outputs.version }}"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          & "C:\Program Files (x86)\NSIS\makensis.exe" /V2 "/DVERSION=$v" installer\installer.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $portable = "dist\Coverly-$v-portable"
+          New-Item -ItemType Directory -Force $portable | Out-Null
+          Copy-Item target\release\coverly.exe $portable
+          Copy-Item -Recurse templates "$portable\templates"
+          Copy-Item README.md, LICENSE $portable
+          Compress-Archive -Path "$portable\*" -DestinationPath "dist\Coverly-$v-portable.zip" -Force
+
+          Get-ChildItem dist -File | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          Get-Content dist\SHA256SUMS.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Coverly ${{ steps.version.outputs.version }}
+          prerelease: ${{ steps.version.outputs.prerelease }}
+          generate_release_notes: true
+          body: |
+
+            - **Coverly-Setup-${{ steps.version.outputs.version }}.exe**: installer (recommended)
+            - **Coverly-${{ steps.version.outputs.version }}-portable.zip**: no install, unzip and run `coverly.exe`
+
+            Needs Windows 10 or 11 (Microsoft Edge WebView2, built into Windows, is used for Google search).
+            Check a download with `SHA256SUMS.txt`.
+          files: |
+            dist/Coverly-Setup-${{ steps.version.outputs.version }}.exe
+            dist/Coverly-${{ steps.version.outputs.version }}-portable.zip
+            dist/SHA256SUMS.txt
