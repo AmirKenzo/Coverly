@@ -97,14 +97,23 @@ Section "Desktop shortcut" SecDesktop
   CreateShortcut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\app.ico"
 SectionEnd
 
+Section "Right-click menu for folders and videos" SecMenu
+  ExecWait '"$INSTDIR\${EXE}" --register-menu'
+SectionEnd
+
 Function .onInit
   ${GetParameters} $0
   ClearErrors
   ${GetOptions} $0 "/RELAUNCH" $1
   IfErrors init_done
   StrCpy $Relaunch 1
-  IfFileExists "$DESKTOP\${APPNAME}.lnk" init_done
+  IfFileExists "$DESKTOP\${APPNAME}.lnk" keep_desktop
   !insertmacro UnselectSection ${SecDesktop}
+  keep_desktop:
+  ClearErrors
+  ReadRegStr $2 HKLM "Software\Classes\Directory\shell\${APPNAME}" "MUIVerb"
+  IfErrors 0 init_done
+  !insertmacro UnselectSection ${SecMenu}
   init_done:
 FunctionEnd
 
@@ -114,6 +123,7 @@ Function .onInstSuccess
 FunctionEnd
 
 Section "Uninstall"
+  ExecWait '"$INSTDIR\${EXE}" --unregister-menu'
   Delete "$INSTDIR\${EXE}"
   Delete "$INSTDIR\app.ico"
   Delete "$INSTDIR\uninstall.exe"

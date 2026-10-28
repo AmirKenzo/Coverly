@@ -1,5 +1,7 @@
 use crate::{
     config::{cache_dir, Config},
+    context_menu, folder,
+    instance::{Action, Inbox, Request},
     name::{self, clean_folder_name, NameFmt, ParsedName},
     nfo,
     search_cache::{self, Saved, SearchCache},
@@ -22,9 +24,11 @@ use std::{
         mpsc::{Receiver, Sender},
         Arc,
     },
+    time::{Duration, Instant},
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const INBOX_QUIET: Duration = Duration::from_millis(400);
 const TITLE_H: f32 = 38.0;
 const TILE: Vec2 = Vec2::new(152.0, 228.0);
 const PAGE_SHOWN: usize = 60;
@@ -225,6 +229,18 @@ pub struct App {
     logo: TextureHandle,
     updater: Updater,
     show_update: bool,
+    inbox: Option<Inbox>,
+    incoming: Vec<PathBuf>,
+    incoming_action: Action,
+    incoming_at: Option<Instant>,
+    explorer: Option<ExplorerDialog>,
+}
+
+struct ExplorerDialog {
+    dirs: Vec<PathBuf>,
+    videos: Vec<PathBuf>,
+    done: HashSet<PathBuf>,
+    skip_done: bool,
 }
 
 enum UpdateAction {
@@ -237,7 +253,7 @@ enum UpdateAction {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, start: Option<PathBuf>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, request: Option<Request>, inbox: Option<Inbox>) -> Self {
         setup_style(&cc.egui_ctx);
         let cfg = Config::load();
         let (jobs, msgs) = worker::spawn(cc.egui_ctx.clone());
@@ -248,6 +264,12 @@ impl App {
         let updater = Updater::new(cc.egui_ctx.clone());
         if cfg.update_check {
             updater.check(&cfg, false);
+        }
+        if let Some(i) = &inbox {
+            i.attach(&cc.egui_ctx);
+        }
+        if context_menu::registered(context_menu::Scope::User) {
+            let _ = context_menu::register(context_menu::Scope::User);
         }
 
         let mut app = Self {
@@ -314,9 +336,14 @@ impl App {
             logo: load_tex(&cc.egui_ctx, "logo", &templates::app_icon(64)),
             updater,
             show_update: false,
+            inbox,
+            incoming: Vec::new(),
+            incoming_action: Action::Pick,
+            incoming_at: None,
+            explorer: None,
         };
-        if let Some(p) = start {
-            app.open_folder(p);
+        if let Some(r) = request {
+            app.receive(r);
         }
         app
     }
@@ -978,6 +1005,97 @@ impl App {
         }
     }
 
+    fn receive(&mut self, r: Request) {
+        if !self.incoming.is_empty() && r.action != self.incoming_action {
+            self.flush_incoming();
+        }
+        self.incoming_action = r.action;
+        self.incoming.extend(r.paths);
+        self.incoming_at = Some(Instant::now());
+    }
+
+    /// Explorer starts one process per selected item, so paths are gathered until they stop arriving.
+    fn poll_inbox(&mut self, ctx: &egui::Context) {
+        while let Some(r) = self.inbox.as_ref().and_then(Inbox::try_recv) {
+            self.receive(r);
+        }
+        let Some(at) = self.incoming_at else {
+            return;
+        };
+        let wait = INBOX_QUIET.saturating_sub(at.elapsed());
+        if !wait.is_zero() {
+            ctx.request_repaint_after(wait);
+            return;
+        }
+        self.flush_incoming();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    fn flush_incoming(&mut self) {
+        self.incoming_at = None;
+        let mut paths = std::mem::take(&mut self.incoming);
+        paths.sort();
+        paths.dedup();
+        let dirs: Vec<PathBuf> = paths.iter().filter(|p| p.is_dir()).cloned().collect();
+        let films: Vec<PathBuf> = paths
+            .iter()
+            .filter(|p| p.is_file() && videos::is_video(p))
+            .cloned()
+            .collect();
+
+        match self.incoming_action {
+            Action::Remove => {
+                for d in &dirs {
+                    self.send(Job::Remove { folder: d.clone() });
+                }
+                if !dirs.is_empty() {
+                    self.status = format!("Removing the icon from {} folders…", dirs.len());
+                }
+            }
+            Action::Videos => {
+                if !films.is_empty() {
+                    self.open_videos(films);
+                }
+            }
+            Action::Auto => {
+                self.auto_folders(dirs);
+                if !films.is_empty() {
+                    self.open_videos(films);
+                }
+            }
+            Action::Pick if dirs.len() > 1 => {
+                let done = dirs.iter().filter(|d| folder::has_our_icon(d)).cloned().collect();
+                self.explorer = Some(ExplorerDialog {
+                    dirs,
+                    videos: films,
+                    done,
+                    skip_done: true,
+                });
+            }
+            Action::Pick => {
+                if !films.is_empty() {
+                    self.open_videos(films);
+                }
+                if let Some(d) = dirs.into_iter().next() {
+                    if self.queue.is_empty() {
+                        self.queue_pos = None;
+                        self.open_folder(d);
+                    } else {
+                        self.add_to_queue(vec![d], true);
+                    }
+                }
+            }
+        }
+    }
+
+    fn auto_folders(&mut self, dirs: Vec<PathBuf>) {
+        self.add_to_queue(dirs.clone(), false);
+        let items: Vec<(PathBuf, String)> = dirs.into_iter().map(|d| (d.clone(), self.banner_for(&d))).collect();
+        let tpl = self.poster_template();
+        self.start_auto(items, tpl);
+    }
+
     fn create_video_folders(&mut self) {
         let Some(d) = self.videos.take() else { return };
         let mut made: Vec<PathBuf> = Vec::new();
@@ -1345,6 +1463,7 @@ impl App {
         if ctx.wants_keyboard_input()
             || self.show_settings
             || self.show_update
+            || self.explorer.is_some()
             || self.multi.is_some()
             || self.rename.is_some()
             || self.videos.is_some()
@@ -2619,6 +2738,38 @@ impl App {
                 });
 
                 ui.add_space(12.0);
+                section_title(ui, "RIGHT-CLICK MENU");
+                if context_menu::registered(context_menu::Scope::Machine) {
+                    ui.label(
+                        RichText::new(
+                            "Coverly is in the right-click menu of folders and video files (set by the installer).",
+                        )
+                        .size(12.0)
+                        .color(MUTED),
+                    );
+                } else {
+                    let mut on = context_menu::registered(context_menu::Scope::User);
+                    if ui
+                        .checkbox(&mut on, "Show Coverly when you right-click folders and video files")
+                        .changed()
+                    {
+                        let done = if on {
+                            context_menu::register(context_menu::Scope::User)
+                        } else {
+                            context_menu::unregister(context_menu::Scope::User)
+                        };
+                        if let Err(e) = done {
+                            self.last_error = Some(format!("Couldn't change the right-click menu: {e:#}"));
+                        }
+                    }
+                }
+                ui.label(
+                    RichText::new("On Windows 11 it's under “Show more options”.")
+                        .size(12.0)
+                        .color(MUTED),
+                );
+
+                ui.add_space(12.0);
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.add(primary_button("Save", 34.0)).clicked() {
@@ -2789,6 +2940,82 @@ impl App {
         }
         if !open {
             self.show_update = false;
+        }
+    }
+
+    fn explorer_window(&mut self, ctx: &egui::Context) {
+        let Some(d) = self.explorer.as_mut() else {
+            return;
+        };
+        let mut open = true;
+        let mut choice = None;
+        let mut cancel = false;
+        egui::Window::new(RichText::new("From Explorer").family(bold()).size(18.0))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(440.0)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                let n = d.dirs.len() + d.videos.len();
+                ui.label(
+                    RichText::new(format!("{n} items arrived together"))
+                        .size(12.0)
+                        .color(MUTED),
+                );
+                ui.add_space(10.0);
+                section_title(ui, "WHAT CAME IN");
+                explorer_row(ui, Icon::Folder, &format!("{} folders", d.dirs.len()), "→ queue");
+                if !d.videos.is_empty() {
+                    explorer_row(
+                        ui,
+                        Icon::Film,
+                        &format!("{} video files", d.videos.len()),
+                        "→ make folders first",
+                    );
+                }
+                if !d.done.is_empty() {
+                    ui.add_space(6.0);
+                    ui.checkbox(
+                        &mut d.skip_done,
+                        format!("Skip folders that already have an icon ({})", d.done.len()),
+                    );
+                }
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(primary_button("Pick covers one by one", 34.0).icon(Icon::Search))
+                        .clicked()
+                    {
+                        choice = Some(false);
+                    }
+                    if ui.add(ghost_button("Set all automatically")).clicked() {
+                        choice = Some(true);
+                    }
+                    if ui.add(quiet_button("Cancel")).clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if let Some(auto) = choice {
+            if let Some(d) = self.explorer.take() {
+                let dirs: Vec<PathBuf> = d
+                    .dirs
+                    .into_iter()
+                    .filter(|p| !(d.skip_done && d.done.contains(p)))
+                    .collect();
+                if auto {
+                    self.auto_folders(dirs);
+                } else {
+                    self.add_to_queue(dirs, true);
+                }
+                if !d.videos.is_empty() {
+                    self.open_videos(d.videos);
+                }
+            }
+        } else if cancel || !open {
+            self.explorer = None;
         }
     }
 
@@ -3156,6 +3383,7 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.poll(ctx, frame);
+        self.poll_inbox(ctx);
         self.handle_drops(ctx);
         self.handle_paste(ctx);
         self.handle_keys(ctx);
@@ -3167,6 +3395,7 @@ impl eframe::App for App {
         self.central(ctx);
         self.settings_window(ctx);
         self.update_window(ctx);
+        self.explorer_window(ctx);
         self.multi_window(ctx);
         self.rename_window(ctx);
         self.videos_window(ctx);
@@ -3175,6 +3404,7 @@ impl eframe::App for App {
         let area = self.google_rect.take().filter(|_| {
             !self.show_settings
                 && !self.show_update
+                && self.explorer.is_none()
                 && self.multi.is_none()
                 && self.rename.is_none()
                 && self.videos.is_none()
@@ -3311,6 +3541,24 @@ fn is_elevated() -> bool {
 fn load_tex(ctx: &egui::Context, name: &str, img: &RgbaImage) -> TextureHandle {
     let ci = ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
     ctx.load_texture(name, ci, TextureOptions::LINEAR)
+}
+
+fn explorer_row(ui: &mut egui::Ui, icon: Icon, text: &str, hint: &str) {
+    egui::Frame::none()
+        .fill(FIELD)
+        .rounding(6.0)
+        .inner_margin(Margin::symmetric(12.0, 8.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                icon_label(ui, icon, 15.0, ACCENT);
+                ui.label(RichText::new(text).size(12.5).color(TEXT));
+                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(RichText::new(hint).size(12.0).color(MUTED));
+                });
+            });
+        });
+    ui.add_space(4.0);
 }
 
 fn percent(done: u64, total: u64) -> u64 {

@@ -2,8 +2,10 @@
 
 mod app;
 mod config;
+mod context_menu;
 mod folder;
 mod icon;
+mod instance;
 mod name;
 mod net;
 mod nfo;
@@ -16,13 +18,27 @@ mod videos;
 mod worker;
 
 use eframe::egui;
-use std::{io::Write, path::PathBuf};
+use std::io::Write;
 
 fn main() -> Result<(), eframe::Error> {
+    if let Some(code) = context_menu::run_cli() {
+        std::process::exit(code);
+    }
     install_crash_log();
-    update::cleanup();
 
-    let start = std::env::args_os().nth(1).map(PathBuf::from).filter(|p| p.is_dir());
+    let request = instance::Request::from_args(std::env::args_os().skip(1));
+    let server = instance::claim();
+    if server.is_none() {
+        if let Some(r) = &request {
+            if instance::send(r) {
+                return Ok(());
+            }
+        }
+    }
+    let inbox = server.map(instance::Server::listen);
+    if inbox.is_some() {
+        update::cleanup();
+    }
 
     let icon = templates::app_icon(64);
     let viewport = egui::ViewportBuilder::default()
@@ -45,7 +61,7 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         config::APP_NAME,
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, start)))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, request, inbox)))),
     )
 }
 

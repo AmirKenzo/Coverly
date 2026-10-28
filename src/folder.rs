@@ -10,6 +10,12 @@ pub fn is_our_icon(name: &str) -> bool {
     name.starts_with(ICON_PREFIX) && name.to_ascii_lowercase().ends_with(".ico")
 }
 
+pub fn has_our_icon(folder: &Path) -> bool {
+    fs::read_dir(folder)
+        .map(|it| it.flatten().any(|e| is_our_icon(&e.file_name().to_string_lossy())))
+        .unwrap_or(false)
+}
+
 pub fn apply_icon(folder: &Path, ico: &[u8]) -> Result<PathBuf> {
     if !folder.is_dir() {
         bail!("not a folder: {}", folder.display());
