@@ -1,5 +1,7 @@
 Unicode true
 !include "MUI2.nsh"
+!include "FileFunc.nsh"
+!include "Sections.nsh"
 
 !define APPNAME   "Coverly"
 !ifndef VERSION
@@ -44,6 +46,8 @@ VIAddVersionKey "LegalCopyright"  "MIT License"
 !insertmacro MUI_LANGUAGE "English"
 !insertmacro MUI_LANGUAGE "Farsi"
 
+Var Relaunch
+
 Function LaunchAsUser
   Exec '"$WINDIR\explorer.exe" "$INSTDIR\${EXE}"'
 FunctionEnd
@@ -51,6 +55,20 @@ FunctionEnd
 Section "${APPNAME} (required)" SecMain
   SectionIn RO
   SetOutPath "$INSTDIR"
+
+  ; The in-app updater starts this installer while Coverly is still closing.
+  StrCpy $0 0
+  wait_for_app:
+    ClearErrors
+    FileOpen $1 "$INSTDIR\${EXE}" a
+    IfErrors 0 app_closed
+    IntOp $0 $0 + 1
+    IntCmp $0 40 app_closed
+    Sleep 250
+    Goto wait_for_app
+  app_closed:
+    FileClose $1
+
   File "..\target\release\${EXE}"
   File "..\assets\app.ico"
 
@@ -78,6 +96,22 @@ SectionEnd
 Section "Desktop shortcut" SecDesktop
   CreateShortcut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\app.ico"
 SectionEnd
+
+Function .onInit
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/RELAUNCH" $1
+  IfErrors init_done
+  StrCpy $Relaunch 1
+  IfFileExists "$DESKTOP\${APPNAME}.lnk" init_done
+  !insertmacro UnselectSection ${SecDesktop}
+  init_done:
+FunctionEnd
+
+Function .onInstSuccess
+  StrCmp $Relaunch 1 0 +2
+  Call LaunchAsUser
+FunctionEnd
 
 Section "Uninstall"
   Delete "$INSTDIR\${EXE}"

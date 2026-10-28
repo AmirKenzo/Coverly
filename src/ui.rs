@@ -50,6 +50,7 @@ pub enum Icon {
     Circle,
     Trash,
     Layers,
+    Download,
 }
 
 pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -170,6 +171,11 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
         }
         Icon::Check => {
             p.add(line(&[(-0.6, 0.02), (-0.18, 0.45), (0.65, -0.45)]));
+        }
+        Icon::Download => {
+            p.add(line(&[(0.0, -0.75), (0.0, 0.3)]));
+            p.add(line(&[(-0.4, -0.08), (0.0, 0.32), (0.4, -0.08)]));
+            p.add(line(&[(-0.7, 0.72), (0.7, 0.72)]));
         }
         Icon::Film => {
             p.rect_stroke(rect_of(-0.8, -0.6, 0.8, 0.6), 2.0, st);

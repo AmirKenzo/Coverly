@@ -25,6 +25,11 @@ pub struct Config {
     pub label_style: LabelStyle,
     pub last_template: String,
     pub icon_sizes: Vec<u32>,
+
+    pub update_check: bool,
+    pub update_beta: bool,
+    pub update_via_proxy: bool,
+    pub update_skip: String,
 }
 
 impl Default for Config {
@@ -51,6 +56,10 @@ impl Default for Config {
             label_style: LabelStyle::Bar,
             last_template: "folder-yellow".into(),
             icon_sizes: vec![16, 24, 32, 48, 64, 128, 256],
+            update_check: true,
+            update_beta: false,
+            update_via_proxy: true,
+            update_skip: String::new(),
         }
     }
 }
@@ -101,7 +110,19 @@ impl Config {
         if s == SourceKind::Local {
             return vec![None];
         }
-        let first = self.proxy_for(s);
+        self.routes(self.proxy_for(s))
+    }
+
+    pub fn update_routes(&self) -> Vec<Option<String>> {
+        let first = if self.proxy_enabled && self.update_via_proxy {
+            self.proxy_address()
+        } else {
+            None
+        };
+        self.routes(first)
+    }
+
+    fn routes(&self, first: Option<String>) -> Vec<Option<String>> {
         let mut v = vec![first.clone()];
         if self.proxy_enabled {
             if let Some(p) = self.proxy_address() {

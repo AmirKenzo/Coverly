@@ -11,6 +11,7 @@ mod search_cache;
 mod sources;
 mod templates;
 mod ui;
+mod update;
 mod videos;
 mod worker;
 
@@ -19,6 +20,7 @@ use std::{io::Write, path::PathBuf};
 
 fn main() -> Result<(), eframe::Error> {
     install_crash_log();
+    update::cleanup();
 
     let start = std::env::args_os().nth(1).map(PathBuf::from).filter(|p| p.is_dir());
 

@@ -6,6 +6,7 @@ use crate::{
     sources::{bing, google_web::GoogleWeb, local, title_rank, ImageHit, Match, Mode, Shape, SourceKind, WebQuery},
     templates::{self, Adjust, LabelStyle, Overlay, Template},
     ui::*,
+    update::{self, Note, Release, State as UpdateState, Updater},
     videos,
     worker::{self, Job, List, Msg},
 };
@@ -222,6 +223,17 @@ pub struct App {
     saved_at: Option<u64>,
     videos: Option<VideoDialog>,
     logo: TextureHandle,
+    updater: Updater,
+    show_update: bool,
+}
+
+enum UpdateAction {
+    Download(Release),
+    Cancel,
+    Install,
+    Later,
+    Skip(String),
+    Check,
 }
 
 impl App {
@@ -233,6 +245,10 @@ impl App {
         let families = templates::families(&templates);
         let tpl_idx = templates.iter().position(|t| t.id == cfg.last_template).unwrap_or(0);
         let n = templates.len();
+        let updater = Updater::new(cc.egui_ctx.clone());
+        if cfg.update_check {
+            updater.check(&cfg, false);
+        }
 
         let mut app = Self {
             draft: cfg.clone(),
@@ -296,6 +312,8 @@ impl App {
             saved_at: None,
             videos: None,
             logo: load_tex(&cc.egui_ctx, "logo", &templates::app_icon(64)),
+            updater,
+            show_update: false,
         };
         if let Some(p) = start {
             app.open_folder(p);
@@ -1326,6 +1344,7 @@ impl App {
     fn handle_keys(&mut self, ctx: &egui::Context) {
         if ctx.wants_keyboard_input()
             || self.show_settings
+            || self.show_update
             || self.multi.is_some()
             || self.rename.is_some()
             || self.videos.is_some()
@@ -1372,6 +1391,33 @@ impl App {
                     egui::Image::from_texture(SizedTexture::from_handle(&self.logo)).paint_at(ui, r);
                     ui.label(RichText::new("Coverly").size(13.5).family(bold()).color(TEXT));
                     tag(ui, &format!("v{VERSION}"), MUTED, CHIP);
+                    let pill = |text: String, kind: Kind| {
+                        Btn::new(text, kind)
+                            .icon(Icon::Download)
+                            .height(22.0)
+                            .font(12.0)
+                            .rounding(11.0)
+                    };
+                    let badge = match self.updater.state() {
+                        UpdateState::Available(r) => Some(
+                            pill(format!("v{} available", r.version), Kind::Chip(false))
+                                .icon_color(ACCENT)
+                                .color(ACCENT),
+                        ),
+                        UpdateState::Downloading { release, done } => Some(pill(
+                            format!("Updating {}%", percent(done, release.size)),
+                            Kind::Chip(false),
+                        )),
+                        UpdateState::Ready { .. } => {
+                            Some(pill("Restart to update".into(), Kind::Primary).icon(Icon::Refresh))
+                        }
+                        _ => None,
+                    };
+                    if let Some(b) = badge {
+                        if ui.add(b).on_hover_text("Coverly update").clicked() {
+                            self.show_update = true;
+                        }
+                    }
                     ui.add_space(12.0);
 
                     let room = (ui.available_width() - 330.0).clamp(120.0, 520.0);
@@ -1581,6 +1627,22 @@ impl App {
                             );
                             ui.label(RichText::new(format!("{d}/{t}")).size(11.5).color(TEXT));
                             ui.add(egui::Label::new(RichText::new(c).size(11.5).color(MUTED)).truncate());
+                        } else if let UpdateState::Downloading { release, done } = self.updater.state() {
+                            ui.add(
+                                egui::ProgressBar::new(percent(done, release.size) as f32 / 100.0)
+                                    .desired_width(140.0)
+                                    .desired_height(10.0),
+                            );
+                            ui.label(
+                                RichText::new(format!("Downloading Coverly {}", release.version))
+                                    .size(11.5)
+                                    .color(TEXT),
+                            );
+                            ui.label(
+                                RichText::new(format!("{} / {}", mb(done), mb(release.size)))
+                                    .size(11.5)
+                                    .color(MUTED),
+                            );
                         } else if let Some(e) = &self.last_error {
                             let _ = ui
                                 .add(
@@ -2537,6 +2599,26 @@ impl App {
                 );
 
                 ui.add_space(12.0);
+                section_title(ui, "UPDATES");
+                ui.checkbox(&mut d.update_check, "Check for updates when Coverly starts");
+                ui.checkbox(&mut d.update_beta, "Include beta versions");
+                ui.checkbox(&mut d.update_via_proxy, "Use the proxy for GitHub");
+                ui.horizontal(|ui| {
+                    if ui.add(ghost_button("Check now").icon(Icon::Refresh)).clicked() {
+                        self.updater.check(d, true);
+                    }
+                    let (text, color) = update_status(&self.updater.state());
+                    let resp = ui.add(
+                        egui::Label::new(RichText::new(text).size(12.0).color(color))
+                            .truncate()
+                            .sense(Sense::click()),
+                    );
+                    if matches!(self.updater.state(), UpdateState::Available(_)) && resp.clicked() {
+                        self.show_update = true;
+                    }
+                });
+
+                ui.add_space(12.0);
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.add(primary_button("Save", 34.0)).clicked() {
@@ -2561,6 +2643,152 @@ impl App {
         } else if !open {
             self.show_settings = false;
             self.draft = self.cfg.clone();
+        }
+    }
+
+    fn update_window(&mut self, ctx: &egui::Context) {
+        if !self.show_update {
+            return;
+        }
+        let state = self.updater.state();
+        let title = match &state {
+            UpdateState::Ready { .. } => "Update ready",
+            UpdateState::Available(_) | UpdateState::Downloading { .. } => "Update available",
+            _ => "Updates",
+        };
+        let mut open = true;
+        let mut action = None;
+        egui::Window::new(RichText::new(title).family(bold()).size(18.0))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(460.0)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                let release = match &state {
+                    UpdateState::Available(r)
+                    | UpdateState::Downloading { release: r, .. }
+                    | UpdateState::Ready { release: r, .. } => r,
+                    other => {
+                        let (text, color) = update_status(other);
+                        ui.label(RichText::new(text).color(color));
+                        ui.add_space(10.0);
+                        if !matches!(other, UpdateState::Checking) && ui.add(ghost_button("Check now")).clicked() {
+                            action = Some(UpdateAction::Check);
+                        }
+                        return;
+                    }
+                };
+
+                let mut meta = format!("v{VERSION}  →  v{}", release.version);
+                if !release.published.is_empty() {
+                    meta.push_str(&format!("  ·  released {}", release.published));
+                }
+                meta.push_str(&format!("  ·  {}", mb(release.size)));
+                ui.label(RichText::new(meta).size(12.0).color(MUTED));
+                ui.add_space(10.0);
+
+                section_title(ui, "WHAT'S NEW");
+                egui::Frame::none()
+                    .fill(FIELD)
+                    .rounding(6.0)
+                    .inner_margin(Margin::symmetric(12.0, 10.0))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                            let notes = update::notes(&release.notes);
+                            if notes.is_empty() {
+                                ui.label(RichText::new("No notes for this version.").size(12.5).color(MUTED));
+                            }
+                            for n in notes {
+                                match n {
+                                    Note::Heading(h) => {
+                                        ui.add_space(4.0);
+                                        ui.label(RichText::new(h).family(bold()).size(12.5).color(TEXT));
+                                    }
+                                    Note::Item(t) => {
+                                        ui.label(RichText::new(format!("•  {t}")).size(12.5).color(TEXT));
+                                    }
+                                }
+                            }
+                        });
+                    });
+                ui.add_space(4.0);
+                ui.hyperlink_to(RichText::new("View on GitHub").size(12.0), &release.page);
+                ui.add_space(12.0);
+
+                match &state {
+                    UpdateState::Downloading { done, .. } => {
+                        ui.add(egui::ProgressBar::new(percent(*done, release.size) as f32 / 100.0).desired_height(8.0));
+                        ui.label(
+                            RichText::new(format!("{} of {}", mb(*done), mb(release.size)))
+                                .size(12.0)
+                                .color(MUTED),
+                        );
+                        ui.add_space(8.0);
+                        if ui.add(ghost_button("Cancel")).clicked() {
+                            action = Some(UpdateAction::Cancel);
+                        }
+                    }
+                    UpdateState::Ready { .. } => {
+                        ui.label(
+                            RichText::new("Coverly closes, installs the update and opens again.")
+                                .size(12.0)
+                                .color(MUTED),
+                        );
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add(primary_button("Restart now", 34.0).icon(Icon::Refresh))
+                                .clicked()
+                            {
+                                action = Some(UpdateAction::Install);
+                            }
+                            if ui.add(ghost_button("Later")).clicked() {
+                                action = Some(UpdateAction::Later);
+                            }
+                        });
+                    }
+                    _ => {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add(primary_button("Update now", 34.0).icon(Icon::Download))
+                                .clicked()
+                            {
+                                action = Some(UpdateAction::Download(release.clone()));
+                            }
+                            if ui.add(ghost_button("Later")).clicked() {
+                                action = Some(UpdateAction::Later);
+                            }
+                            if ui.add(quiet_button("Skip this version")).clicked() {
+                                action = Some(UpdateAction::Skip(release.version.clone()));
+                            }
+                        });
+                    }
+                }
+            });
+
+        match action {
+            Some(UpdateAction::Download(r)) => self.updater.download(r, &self.cfg),
+            Some(UpdateAction::Cancel) => self.updater.cancel(),
+            Some(UpdateAction::Install) => {
+                if self.updater.install() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+            Some(UpdateAction::Later) => self.show_update = false,
+            Some(UpdateAction::Skip(v)) => {
+                self.cfg.update_skip = v.clone();
+                self.draft.update_skip = v;
+                let _ = self.cfg.save();
+                self.updater.dismiss();
+                self.show_update = false;
+            }
+            Some(UpdateAction::Check) => self.updater.check(&self.cfg, true),
+            None => {}
+        }
+        if !open {
+            self.show_update = false;
         }
     }
 
@@ -2938,15 +3166,19 @@ impl eframe::App for App {
         self.side_panel(ctx);
         self.central(ctx);
         self.settings_window(ctx);
+        self.update_window(ctx);
         self.multi_window(ctx);
         self.rename_window(ctx);
         self.videos_window(ctx);
         self.drop_overlay(ctx);
         self.window_frame(ctx);
-        let area = self
-            .google_rect
-            .take()
-            .filter(|_| !self.show_settings && self.multi.is_none() && self.rename.is_none() && self.videos.is_none());
+        let area = self.google_rect.take().filter(|_| {
+            !self.show_settings
+                && !self.show_update
+                && self.multi.is_none()
+                && self.rename.is_none()
+                && self.videos.is_none()
+        });
         self.google.place(area);
         if !self.pending.is_empty() || self.loading_full || self.batch.is_some() || self.google.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(120));
@@ -3079,6 +3311,29 @@ fn is_elevated() -> bool {
 fn load_tex(ctx: &egui::Context, name: &str, img: &RgbaImage) -> TextureHandle {
     let ci = ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
     ctx.load_texture(name, ci, TextureOptions::LINEAR)
+}
+
+fn percent(done: u64, total: u64) -> u64 {
+    (done * 100 / total.max(1)).min(100)
+}
+
+fn mb(bytes: u64) -> String {
+    format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+}
+
+fn update_status(state: &UpdateState) -> (String, Color32) {
+    match state {
+        UpdateState::Idle => ("Not checked yet".into(), MUTED),
+        UpdateState::Checking => ("Checking GitHub…".into(), MUTED),
+        UpdateState::Latest => (format!("You're on the latest version (v{VERSION})"), OK),
+        UpdateState::Available(r) => (format!("v{} is available · see what's new", r.version), ACCENT),
+        UpdateState::Downloading { release, done } => (
+            format!("Downloading v{} · {}%", release.version, percent(*done, release.size)),
+            MUTED,
+        ),
+        UpdateState::Ready { release, .. } => (format!("v{} is ready to install", release.version), OK),
+        UpdateState::Failed(e) => (e.clone(), DANGER),
+    }
 }
 
 fn short(p: &Path) -> String {
