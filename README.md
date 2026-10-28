@@ -70,8 +70,8 @@ It runs the tests, builds `target\release\coverly.exe` and writes `dist\Coverly-
 The version lives in `Cargo.toml`. Bump it, commit, then push a matching tag:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.2
+git push origin v1.0.2
 ```
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) builds on Windows, makes the installer, the portable zip and `SHA256SUMS.txt`, and publishes them as a GitHub release. Only tags on `main` are released, and a tag that doesn't match `Cargo.toml` stops the build.
