@@ -1,0 +1,45 @@
+[package]
+name = "coverly"
+version = "1.0.0"
+edition = "2021"
+description = "Movie and series posters as Windows folder icons: drop folders or video files, pick a cover, done."
+license = "MIT"
+authors = ["Amir Kenzo"]
+repository = "https://github.com/AmirKenzo/Coverly"
+readme = "README.md"
+build = "build.rs"
+
+[dependencies]
+eframe = "0.29"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "ico"] }
+ico = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "socks", "gzip", "brotli"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+rayon = "1"
+regex = "1"
+dirs = "5"
+rfd = "0.15"
+ab_glyph = "0.2"
+anyhow = "1"
+arboard = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_UI_Shell"] }
+wry = "0.57"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

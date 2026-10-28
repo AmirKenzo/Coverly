@@ -1,0 +1,9 @@
+# Example custom template. Copy this folder, change the PNGs and numbers,
+# and it shows up in Coverly under the "Custom" style.
+name   = "Gold frame (example)"
+family = "Custom"
+canvas = 512                     # the PNGs below are 512x512
+poster = { x = 96, y = 40, w = 320, h = 432, radius = 4 }
+shape  = "rect"                  # or "circle"
+below  = ["shadow.png"]          # drawn under the poster
+above  = ["frame.png"]           # drawn over the poster (transparent where the poster shows)
