@@ -11,7 +11,6 @@
 
 <p align="center">
   <a href="https://github.com/AmirKenzo/Coverly/releases/latest"><img src="https://img.shields.io/github/v/release/AmirKenzo/Coverly?label=download" alt="Latest release"></a>
-  <a href="https://github.com/AmirKenzo/Coverly/actions/workflows/ci.yml"><img src="https://github.com/AmirKenzo/Coverly/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/AmirKenzo/Coverly" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6" alt="Windows 10 and 11">
 </p>

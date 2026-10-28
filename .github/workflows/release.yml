@@ -1,5 +1,7 @@
 name: Release
 
+# Runs only when a version tag is pushed (git tag v1.2.3 && git push origin v1.2.3),
+# or by hand from the Actions tab to rebuild an existing tag.
 on:
   push:
     tags: ["v*"]
@@ -13,7 +15,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -22,19 +24,28 @@ jobs:
     runs-on: windows-latest
     env:
       CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
     steps:
+      - name: Check the tag name
+        shell: pwsh
+        run: |
+          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+            Write-Error "'$env:TAG' is not a version tag like v1.2.3 or v1.2.3-beta.1."
+            exit 1
+          }
+
       - name: Check out
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: refs/tags/${{ env.TAG }}
           fetch-depth: 0
 
       - name: Check the tag is on main
         shell: pwsh
         run: |
-          git fetch origin main
+          git fetch --no-tags origin main
           git merge-base --is-ancestor HEAD origin/main
           if ($LASTEXITCODE -ne 0) {
             Write-Error "$env:TAG is not on the main branch. Only commits on main are released."
@@ -56,14 +67,10 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust builds
-        uses: Swatinem/rust-cache@v2
-
-      - name: Test
-        run: cargo test --release
-
+      # No Rust cache on purpose: caches saved by a tag run can't be read by the
+      # next tag, so saving one only adds upload time.
       - name: Build
-        run: cargo build --release
+        run: cargo build --release --locked
 
       - name: Install NSIS
         shell: pwsh
@@ -87,11 +94,35 @@ jobs:
           Copy-Item README.md, LICENSE $portable
           Compress-Archive -Path "$portable\*" -DestinationPath "dist\Coverly-$v-portable.zip" -Force
 
+          # The in-app updater reads this file to verify what it downloaded.
           Get-ChildItem dist -File | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             "$hash  $($_.Name)"
           } | Set-Content -Encoding ascii dist\SHA256SUMS.txt
           Get-Content dist\SHA256SUMS.txt
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      # Notes come from the commits between the previous tag and this one (cliff.toml).
+      - name: Generate release notes
+        shell: pwsh
+        run: |
+          $v = "${{ steps.version.outputs.version }}"
+          git cliff --current --strip header -o RELEASE_NOTES.md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @"
+
+          ### Downloads
+          - **Coverly-Setup-$v.exe**: installer (recommended)
+          - **Coverly-$v-portable.zip**: no install, unzip and run ``coverly.exe``
+
+          Needs Windows 10 or 11 (Microsoft Edge WebView2, built into Windows, is used for Google search).
+          Check a download with ``SHA256SUMS.txt``.
+          "@ | Add-Content -Encoding utf8 RELEASE_NOTES.md
+          Get-Content RELEASE_NOTES.md
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -99,14 +130,9 @@ jobs:
           tag_name: ${{ env.TAG }}
           name: Coverly ${{ steps.version.outputs.version }}
           prerelease: ${{ steps.version.outputs.prerelease }}
-          generate_release_notes: true
-          body: |
-
-            - **Coverly-Setup-${{ steps.version.outputs.version }}.exe**: installer (recommended)
-            - **Coverly-${{ steps.version.outputs.version }}-portable.zip**: no install, unzip and run `coverly.exe`
-
-            Needs Windows 10 or 11 (Microsoft Edge WebView2, built into Windows, is used for Google search).
-            Check a download with `SHA256SUMS.txt`.
+          make_latest: ${{ steps.version.outputs.prerelease == 'false' }}
+          body_path: RELEASE_NOTES.md
+          fail_on_unmatched_files: true
           files: |
             dist/Coverly-Setup-${{ steps.version.outputs.version }}.exe
             dist/Coverly-${{ steps.version.outputs.version }}-portable.zip
