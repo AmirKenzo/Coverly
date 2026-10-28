@@ -16,19 +16,53 @@
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6" alt="Windows 10 and 11">
 </p>
 
----
+<p align="center">
+  <a href="https://github.com/AmirKenzo/Coverly/releases/latest"><b>Download for Windows</b></a>
+  &nbsp;·&nbsp;
+  <a href="#features">Features</a>
+  &nbsp;·&nbsp;
+  <a href="#build-from-source">Build</a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/app.jpg" alt="Coverly: search results, the folder icon preview and templates" width="100%">
+</p>
+
+## From plain folders to posters
+
+<p align="center">
+  <img src="docs/screenshots/before-after.jpg" alt="A folder of movies before and after Coverly" width="100%">
+</p>
+
+Drop your movie folders on the window. Coverly reads the title and year from each name, finds the posters, and you pick one per folder with <kbd>Enter</kbd>, or let it choose them all by itself.
 
 ## Features
 
 - **Drag and drop.** Drop one folder, a hundred folders, or video files. The title, year and season are read from the name and the search starts by itself.
-- **Video files become folders.** `Interstellar.2014.1080p.mkv` becomes `Interstellar (2014)\`, together with its subtitles. Episodes go into `Show\Season 01\`.
 - **Pictures from everywhere, inside the app.** Google, Bing, IMDb, fanart.tv and TMDB, each result marked with its source. Modes for posters, ready-made folder icons, icons, logos and backdrops.
-- **More than 100 templates.** Windows 11 folders in many colours, full-picture folders, DVD / Blu-ray cases, steelbooks, VHS, polaroids, frames and more. You can add your own PNG templates.
-- **Labels.** Title, `S2`, or any text on the icon, in four styles, plus the rating from `.nfo` or TMDB.
 - **Fast queue.** Work through many folders: pick a picture, press <kbd>Enter</kbd> and the next folder opens. Or let Coverly set them all automatically.
+- **Labels.** Title, `S2`, or any text on the icon, in four styles, plus the rating from `.nfo` or TMDB.
 - **Saved searches.** A search never runs twice, so sites don't rate-limit you.
 - **Proxy.** One click on or off (v2rayN and similar), and you choose which sources use it.
 - **Rename.** Clean folder names like `Title (Year)` from the matched title.
+
+### Video files become folders
+
+<p align="center">
+  <img src="docs/screenshots/video-files.jpg" alt="Making a folder for each dropped video file" width="100%">
+</p>
+
+Drop loose video files and each one gets its own folder: `Interstellar.2014.1080p.mkv` becomes `Interstellar (2014)\`, together with its subtitles, and episodes go into `Show\Season 01\`. Then the icons are set automatically, with or without a name banner.
+
+### 100+ templates
+
+<p align="center">
+  <img src="docs/screenshots/templates.jpg" alt="The same poster in different templates" width="100%">
+</p>
+
+Windows 11 folders in many colours, full-picture folders, DVD / Blu-ray and 4K cases, steelbooks, VHS, circles, polaroids, frames and more, each with zoom and position controls. You can add your own PNG templates too.
+
+<sub>The films in these pictures are made up.</sub>
 
 ## Download
 
@@ -93,6 +127,7 @@ Copy `templates\Example - Gold Frame`, change the PNG layers and the numbers in 
 ## Project layout
 
 ```
+docs/screenshots/  pictures for this page
 src/
   main.rs          window setup
   app.rs           the interface
